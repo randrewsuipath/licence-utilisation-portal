@@ -7,13 +7,12 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarHeader,
-  SidebarSeparator,
   SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
 } from "@/components/ui/sidebar";
-export function AppSidebar(): JSX.Element {
+export function AppSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   return (
@@ -43,15 +42,15 @@ export function AppSidebar(): JSX.Element {
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild disabled>
-                <a href="#">
+              <SidebarMenuButton asChild isActive={location.pathname === '/imports'}>
+                <a href="#" onClick={(e) => { e.preventDefault(); navigate('/imports'); }}>
                   <FileText /> <span>Imports</span>
                 </a>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild disabled>
-                <a href="#">
+              <SidebarMenuButton asChild isActive={location.pathname === '/admin/metric-mappings'}>
+                <a href="#" onClick={(e) => { e.preventDefault(); navigate('/admin/metric-mappings'); }}>
                   <Settings /> <span>Metric Mapping Admin</span>
                 </a>
               </SidebarMenuButton>
