@@ -2,7 +2,7 @@
 
 A professional operational dashboard for monitoring Power BI licence utilisation, import quality, and account-level consumption analysis using UiPath Data Fabric entities with configurable metric mappings and comprehensive audit trails.
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/randrewsuipath/licence-utilisation-portal)
 
 ## Overview
 
@@ -170,7 +170,7 @@ bun run preview
 
 This application is designed to be deployed on Cloudflare Pages.
 
-[cloudflarebutton]
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/randrewsuipath/licence-utilisation-portal)
 
 #### Manual Deployment
 
