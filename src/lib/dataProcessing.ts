@@ -49,18 +49,18 @@ export function processSnapshotData(
   const accountMap = new Map(accounts.map(a => [a.subsidiaryId, a]));
   return snapshots.map(snapshot => {
     const account = accountMap.get(snapshot.subsidiaryId);
-    const metricMap = activeMetricMaps.find(m => m.licensedProduct === snapshot.licensedProduct);
+    const metricMap = activeMetricMaps.find(m => m.licensedProduct === snapshot.licensedProduct);    
     let licensedQuantity: number | null = null;
     let usageValue: number | null = null;
     let utilisationPercentage: number | null = null;
     if (metricMap) {
       // Extract licensed quantity using licensedQuantityMetric field name
       const licensedQtyFieldName = metricMap.licensedQuantityMetric || 'licensedProductQty';
-      licensedQuantity = snapshot[licensedQtyFieldName] ?? null;
+      licensedQuantity = (typeof snapshot[licensedQtyFieldName] === 'number' ? snapshot[licensedQtyFieldName] : null);
       // Extract usage value using primaryUsageMetric field name
       const usageFieldName = metricMap.primaryUsageMetric;
       if (usageFieldName) {
-        usageValue = snapshot[usageFieldName] ?? null;
+        usageValue = (typeof snapshot[usageFieldName] === 'number' ? snapshot[usageFieldName] : null);
       }
       // Calculate utilisation percentage
       if (licensedQuantity && licensedQuantity > 0 && usageValue !== null) {

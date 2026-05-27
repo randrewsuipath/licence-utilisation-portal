@@ -8,6 +8,7 @@ import { KpiCard } from '@/components/KpiCard';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { processSnapshotData } from '@/lib/dataProcessing';
 import type { ProcessedSnapshot, UtilisationRisk } from '@/lib/types';
@@ -38,6 +39,11 @@ export function AccountDetailPage() {
         const snaps = 'items' in snapshotsResult ? snapshotsResult.items : snapshotsResult;
         const maps = 'items' in metricMapsResult ? metricMapsResult.items : metricMapsResult;
         if (accts.length === 0) {
+          setError('Account not found');
+          setIsLoading(false);
+          return;
+        }
+        if (snaps.length === 0) {
           setError('Account not found');
           setIsLoading(false);
           return;
