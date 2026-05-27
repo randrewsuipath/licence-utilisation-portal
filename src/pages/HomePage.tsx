@@ -1,148 +1,333 @@
-// Home page of the app, Currently a demo page for demonstration.
-// Please rewrite this file to implement your own logic. Do not replace or delete it, simply rewrite this HomePage.tsx file.
-import { useEffect } from 'react'
-import { Sparkles } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { ThemeToggle } from '@/components/ThemeToggle'
-import { Toaster, toast } from '@/components/ui/sonner'
-import { create } from 'zustand'
-import { useShallow } from 'zustand/react/shallow'
-import { AppLayout } from '@/components/layout/AppLayout'
-
-// Timer store: independent slice with a clear, minimal API, for demonstration
-type TimerState = {
-  isRunning: boolean;
-  elapsedMs: number;
-  start: () => void;
-  pause: () => void;
-  reset: () => void;
-  tick: (deltaMs: number) => void;
-}
-
-const useTimerStore = create<TimerState>((set) => ({
-  isRunning: false,
-  elapsedMs: 0,
-  start: () => set({ isRunning: true }),
-  pause: () => set({ isRunning: false }),
-  reset: () => set({ elapsedMs: 0, isRunning: false }),
-  tick: (deltaMs) => set((s) => ({ elapsedMs: s.elapsedMs + deltaMs })),
-}))
-
-// Counter store: separate slice to showcase multiple stores without coupling
-type CounterState = {
-  count: number;
-  inc: () => void;
-  reset: () => void;
-}
-
-const useCounterStore = create<CounterState>((set) => ({
-  count: 0,
-  inc: () => set((s) => ({ count: s.count + 1 })),
-  reset: () => set({ count: 0 }),
-}))
-
-function formatDuration(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
-
+import { useState, useEffect, useMemo } from 'react';
+import { useAuth } from '@/hooks/useAuth';
+import { Entities } from '@uipath/uipath-typescript/entities';
+import type { EntityRecord } from '@uipath/uipath-typescript/entities';
+import { AppLayout } from '@/components/layout/AppLayout';
+import { KpiCard } from '@/components/KpiCard';
+import { GlobalFilters } from '@/components/GlobalFilters';
+import { UtilisationChart } from '@/components/UtilisationChart';
+import { AccountsTable } from '@/components/AccountsTable';
+import { ExpiryWarningsTable } from '@/components/ExpiryWarningsTable';
+import { UnmappedProductsWarning } from '@/components/UnmappedProductsWarning';
+import { processSnapshotData, getLatestCompletedRun } from '@/lib/dataProcessing';
+import type { ProcessedSnapshot, GlobalFilterState } from '@/lib/types';
+import { AlertCircle, TrendingUp, TrendingDown, Users, AlertTriangle } from 'lucide-react';
+import { format } from 'date-fns';
 export function HomePage() {
-  // Select only what is needed to avoid unnecessary re-renders
-  const { isRunning, elapsedMs } = useTimerStore(
-    useShallow((s) => ({ isRunning: s.isRunning, elapsedMs: s.elapsedMs })),
-  )
-  const start = useTimerStore((s) => s.start)
-  const pause = useTimerStore((s) => s.pause)
-  const resetTimer = useTimerStore((s) => s.reset)
-  const count = useCounterStore((s) => s.count)
-  const inc = useCounterStore((s) => s.inc)
-  const resetCount = useCounterStore((s) => s.reset)
-
-  // Drive the timer only while running; avoid update-depth issues with a scoped RAF
+  const { sdk, isAuthenticated } = useAuth();
+  const entities = useMemo(() => sdk ? new Entities(sdk) : null, [sdk]);
+  const [latestRun, setLatestRun] = useState<EntityRecord | null>(null);
+  const [snapshots, setSnapshots] = useState<EntityRecord[]>([]);
+  const [metricMaps, setMetricMaps] = useState<EntityRecord[]>([]);
+  const [accounts, setAccounts] = useState<EntityRecord[]>([]);
+  const [processedData, setProcessedData] = useState<ProcessedSnapshot[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [filters, setFilters] = useState<GlobalFilterState>({
+    snapshotMonth: null,
+    licensedProduct: null,
+    accountDirector: null,
+    tam: null,
+    csm: null,
+    subsidiaryName: null,
+    region: null,
+    utilisationRisk: null,
+  });
+  // Fetch all data on mount
   useEffect(() => {
-    if (!isRunning) return
-    let raf = 0
-    let last = performance.now()
-    const loop = () => {
-      const now = performance.now()
-      const delta = now - last
-      last = now
-      // Read store API directly to keep effect deps minimal and stable
-      useTimerStore.getState().tick(delta)
-      raf = requestAnimationFrame(loop)
+    if (!entities || !isAuthenticated) return;
+    const loadData = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const [runsResult, metricMapsResult, accountsResult] = await Promise.all([
+          entities.getAllRecords('LicenseSnapshotRun'),
+          entities.getAllRecords('LicenseMetricMap'),
+          entities.getAllRecords('LicenseAccount'),
+        ]);
+        const runs = 'items' in runsResult ? runsResult.items : runsResult;
+        const maps = 'items' in metricMapsResult ? metricMapsResult.items : metricMapsResult;
+        const accts = 'items' in accountsResult ? accountsResult.items : accountsResult;
+        // Find latest completed run
+        const completedRun = getLatestCompletedRun(runs);
+        if (!completedRun) {
+          setError('No completed import run available yet. Please wait for the first import to complete.');
+          setIsLoading(false);
+          return;
+        }
+        setLatestRun(completedRun);
+        setMetricMaps(maps);
+        setAccounts(accts);
+        // Fetch snapshots for this run
+        const snapshotsResult = await entities.getAllRecords('AccountLicenseConsumptionSnapshot', {
+          filter: `snapshotRunKey eq '${completedRun.snapshotRunKey}'`,
+        });
+        const snaps = 'items' in snapshotsResult ? snapshotsResult.items : snapshotsResult;
+        setSnapshots(snaps);
+        // Process data with metric mappings
+        const processed = processSnapshotData(snaps, maps, accts);
+        setProcessedData(processed);
+        setIsLoading(false);
+      } catch (err) {
+        console.error('Error loading dashboard data:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
+        setIsLoading(false);
+      }
+    };
+    loadData();
+  }, [entities, isAuthenticated]);
+  // Apply filters
+  const filteredData = useMemo(() => {
+    let data = processedData;
+    if (filters.snapshotMonth) {
+      data = data.filter(d => d.snapshotMonth === filters.snapshotMonth);
     }
-    raf = requestAnimationFrame(loop)
-    return () => cancelAnimationFrame(raf)
-  }, [isRunning])
-
-  const onPleaseWait = () => {
-    inc()
-    if (!isRunning) {
-      start()
-      toast.success('Building your app…', {
-        description: 'Hang tight, we\'re setting everything up.',
-      })
-    } else {
-      pause()
-      toast.info('Taking a short pause', {
-        description: 'We\'ll continue shortly.',
-      })
+    if (filters.licensedProduct) {
+      data = data.filter(d => d.licensedProduct === filters.licensedProduct);
     }
-  }
-
-  const formatted = formatDuration(elapsedMs)
-
-  return (
-    <AppLayout>
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-4 overflow-hidden relative">
-        <ThemeToggle />
-        <div className="absolute inset-0 bg-gradient-rainbow opacity-10 dark:opacity-20 pointer-events-none" />
-        <div className="text-center space-y-8 relative z-10 animate-fade-in">
-          <div className="flex justify-center">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-primary flex items-center justify-center shadow-primary floating">
-              <Sparkles className="w-8 h-8 text-white rotating" />
-            </div>
-          </div>
-          <h1 className="text-5xl md:text-7xl font-display font-bold text-balance leading-tight">
-            Creating your <span className="text-gradient">app</span>
-          </h1>
-          <p className="text-lg md:text-xl text-muted-foreground max-w-xl mx-auto text-pretty">
-            Your application would be ready soon.
-          </p>
-          <div className="flex justify-center gap-4">
-            <Button 
-              size="lg"
-              onClick={onPleaseWait}
-              className="btn-gradient px-8 py-4 text-lg font-semibold hover:-translate-y-0.5 transition-all duration-200"
-              aria-live="polite"
-            >
-              Please Wait
-            </Button>
-          </div>
-          <div className="flex items-center justify-center gap-6 text-sm text-muted-foreground">
-            <div>
-              Time elapsed: <span className="font-medium tabular-nums text-foreground">{formatted}</span>
-            </div>
-            <div>
-              Coins: <span className="font-medium tabular-nums text-foreground">{count}</span>
-            </div>
-          </div>
-          <div className="flex justify-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => { resetTimer(); resetCount(); toast('Reset complete') }}>
-              Reset
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => { inc(); toast('Coin added') }}>
-              Add Coin
-            </Button>
+    if (filters.accountDirector) {
+      data = data.filter(d => d.accountDirector === filters.accountDirector);
+    }
+    if (filters.tam) {
+      data = data.filter(d => d.tam === filters.tam);
+    }
+    if (filters.csm) {
+      data = data.filter(d => d.csm === filters.csm);
+    }
+    if (filters.subsidiaryName) {
+      data = data.filter(d => d.subsidiaryName?.toLowerCase().includes(filters.subsidiaryName!.toLowerCase()));
+    }
+    if (filters.region) {
+      data = data.filter(d => d.region === filters.region);
+    }
+    if (filters.utilisationRisk) {
+      data = data.filter(d => d.utilisationRisk === filters.utilisationRisk);
+    }
+    return data;
+  }, [processedData, filters]);
+  // Calculate KPIs
+  const kpis = useMemo(() => {
+    const uniqueAccounts = new Set(filteredData.map(d => d.subsidiaryId)).size;
+    const activeAccounts = new Set(
+      filteredData.filter(d => d.isActive).map(d => d.subsidiaryId)
+    ).size;
+    const totalLicensed = filteredData.reduce((sum, d) => sum + (d.licensedQuantity || 0), 0);
+    const totalUsage = filteredData.reduce((sum, d) => sum + (d.usageValue || 0), 0);
+    const avgUtilisation = totalLicensed > 0 ? (totalUsage / totalLicensed) * 100 : 0;
+    const now = new Date();
+    const expiringLicences = filteredData.filter(d => {
+      if (!d.licenseEndDate) return false;
+      const endDate = new Date(d.licenseEndDate);
+      const daysUntilExpiry = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      return daysUntilExpiry >= 0 && daysUntilExpiry <= 90;
+    }).length;
+    const lowUtilAccounts = new Set(
+      filteredData
+        .filter(d => d.utilisationRisk === 'Low utilisation')
+        .map(d => d.subsidiaryId)
+    ).size;
+    const overUtilAccounts = new Set(
+      filteredData
+        .filter(d => d.utilisationRisk === 'Over-utilised')
+        .map(d => d.subsidiaryId)
+    ).size;
+    const unmappedProducts = new Set(
+      filteredData
+        .filter(d => d.utilisationRisk === 'Not mapped')
+        .map(d => d.licensedProduct)
+    ).size;
+    return {
+      uniqueAccounts,
+      activeAccounts,
+      totalLicensed,
+      totalUsage,
+      avgUtilisation,
+      expiringLicences,
+      lowUtilAccounts,
+      overUtilAccounts,
+      unmappedProducts,
+    };
+  }, [filteredData]);
+  // Top under-utilised accounts
+  const underUtilised = useMemo(() => {
+    const accountMap = new Map<number, { name: string; utilisation: number; licensed: number; usage: number }>();
+    filteredData
+      .filter(d => d.utilisationPercentage !== null && d.utilisationPercentage > 0 && d.utilisationPercentage < 25)
+      .forEach(d => {
+        const existing = accountMap.get(d.subsidiaryId);
+        if (!existing) {
+          accountMap.set(d.subsidiaryId, {
+            name: d.subsidiaryName || `Account ${d.subsidiaryId}`,
+            utilisation: d.utilisationPercentage!,
+            licensed: d.licensedQuantity || 0,
+            usage: d.usageValue || 0,
+          });
+        } else {
+          existing.licensed += d.licensedQuantity || 0;
+          existing.usage += d.usageValue || 0;
+          existing.utilisation = existing.licensed > 0 ? (existing.usage / existing.licensed) * 100 : 0;
+        }
+      });
+    return Array.from(accountMap.entries())
+      .map(([id, data]) => ({ subsidiaryId: id, ...data }))
+      .sort((a, b) => a.utilisation - b.utilisation)
+      .slice(0, 10);
+  }, [filteredData]);
+  // Top over-utilised accounts
+  const overUtilised = useMemo(() => {
+    const accountMap = new Map<number, { name: string; utilisation: number; licensed: number; usage: number }>();
+    filteredData
+      .filter(d => d.utilisationPercentage !== null && d.utilisationPercentage > 100)
+      .forEach(d => {
+        const existing = accountMap.get(d.subsidiaryId);
+        if (!existing) {
+          accountMap.set(d.subsidiaryId, {
+            name: d.subsidiaryName || `Account ${d.subsidiaryId}`,
+            utilisation: d.utilisationPercentage!,
+            licensed: d.licensedQuantity || 0,
+            usage: d.usageValue || 0,
+          });
+        } else {
+          existing.licensed += d.licensedQuantity || 0;
+          existing.usage += d.usageValue || 0;
+          existing.utilisation = existing.licensed > 0 ? (existing.usage / existing.licensed) * 100 : 0;
+        }
+      });
+    return Array.from(accountMap.entries())
+      .map(([id, data]) => ({ subsidiaryId: id, ...data }))
+      .sort((a, b) => b.utilisation - a.utilisation)
+      .slice(0, 10);
+  }, [filteredData]);
+  if (!isAuthenticated) {
+    return (
+      <AppLayout container>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="text-center space-y-4">
+            <AlertCircle className="w-12 h-12 text-gray-400 mx-auto" />
+            <p className="text-gray-600">Please log in to view the Licence Utilisation Portal.</p>
           </div>
         </div>
-        <footer className="absolute bottom-8 text-center text-muted-foreground/80">
-          <p>Powered by Cloudflare</p>
-        </footer>
-        <Toaster richColors closeButton />
+      </AppLayout>
+    );
+  }
+  if (isLoading) {
+    return (
+      <AppLayout container>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="text-center space-y-4">
+            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="text-gray-600">Loading dashboard data...</p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+  if (error) {
+    return (
+      <AppLayout container>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="text-center space-y-4 max-w-md">
+            <AlertCircle className="w-12 h-12 text-red-600 mx-auto" />
+            <h3 className="text-lg font-semibold text-gray-900">No Completed Import Run Available</h3>
+            <p className="text-sm text-gray-600">{error}</p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+  return (
+    <AppLayout>
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h1 className="text-2xl font-semibold text-gray-900">Licence Utilisation Portal</h1>
+              <div className="flex items-center gap-4 mt-2 text-sm text-gray-600">
+                <span>Latest snapshot: <span className="font-medium text-gray-900">{latestRun?.snapshotMonth || 'N/A'}</span></span>
+                <span>•</span>
+                <span>Import run: <span className="font-medium text-gray-900">{latestRun?.snapshotTimestamp ? format(new Date(latestRun.snapshotTimestamp), 'dd MMM yyyy HH:mm') : 'N/A'}</span></span>
+                <span>•</span>
+                <span>Source file: <span className="font-medium text-gray-900">{latestRun?.sourceFileName || 'N/A'}</span></span>
+                <span>•</span>
+                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                  latestRun?.status === 'Completed' ? 'bg-green-100 text-green-700' :
+                  latestRun?.status === 'Failed' ? 'bg-red-100 text-red-700' :
+                  latestRun?.status === 'Started' ? 'bg-yellow-100 text-yellow-700' :
+                  'bg-gray-100 text-gray-700'
+                }`}>{latestRun?.status || 'Unknown'}</span>
+              </div>
+            </div>
+            <GlobalFilters filters={filters} onFiltersChange={setFilters} data={processedData} />
+          </div>
+        </div>
+      </div>
+      <div className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+        {/* KPI Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <KpiCard
+            label="Total Accounts"
+            value={kpis.uniqueAccounts}
+            icon={<Users className="w-5 h-5 text-blue-600" />}
+          />
+          <KpiCard
+            label="Active Accounts"
+            value={kpis.activeAccounts}
+            icon={<Users className="w-5 h-5 text-green-600" />}
+          />
+          <KpiCard
+            label="Total Licensed Quantity"
+            value={Math.round(kpis.totalLicensed).toLocaleString()}
+          />
+          <KpiCard
+            label="Total Consumed Units"
+            value={Math.round(kpis.totalUsage).toLocaleString()}
+          />
+          <KpiCard
+            label="Average Utilisation"
+            value={`${kpis.avgUtilisation.toFixed(1)}%`}
+            icon={kpis.avgUtilisation >= 75 ? <TrendingUp className="w-5 h-5 text-green-600" /> : <TrendingDown className="w-5 h-5 text-red-600" />}
+          />
+          <KpiCard
+            label="Expiring Licences"
+            value={kpis.expiringLicences}
+            icon={<AlertTriangle className="w-5 h-5 text-amber-600" />}
+          />
+          <KpiCard
+            label="Low-Utilisation Accounts"
+            value={kpis.lowUtilAccounts}
+            icon={<TrendingDown className="w-5 h-5 text-yellow-600" />}
+          />
+          <KpiCard
+            label="Over-Utilised Accounts"
+            value={kpis.overUtilAccounts}
+            icon={<AlertCircle className="w-5 h-5 text-red-600" />}
+          />
+        </div>
+        {/* Unmapped Products Warning */}
+        {kpis.unmappedProducts > 0 && (
+          <UnmappedProductsWarning count={kpis.unmappedProducts} data={filteredData} />
+        )}
+        {/* Charts */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <UtilisationChart data={filteredData} type="trend" />
+          <UtilisationChart data={filteredData} type="byProduct" />
+        </div>
+        {/* Tables */}
+        <div className="space-y-6">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900 mb-3">Top Under-Utilised Accounts</h3>
+            <AccountsTable data={underUtilised} type="underUtilised" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-gray-900 mb-3">Top Over-Utilised Accounts</h3>
+            <AccountsTable data={overUtilised} type="overUtilised" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-gray-900 mb-3">Licence Expiry Warnings</h3>
+            <ExpiryWarningsTable data={filteredData} />
+          </div>
+        </div>
       </div>
     </AppLayout>
-  )
+  );
 }

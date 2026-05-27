@@ -10,13 +10,7 @@ export function ExpiryWarningsTable({ data }: ExpiryWarningsTableProps) {
   const expiryData = useMemo(() => {
     const now = new Date();
     return data
-      .filter(d => {
-        if (!d.licenseEndDate) return false;
-        try {
-          new Date(d.licenseEndDate);
-          return true;
-        } catch { return false; }
-      })
+      .filter(d => d.licenseEndDate)
       .map(d => {
         const endDate = new Date(d.licenseEndDate!);
         const daysUntilExpiry = differenceInDays(endDate, now);
