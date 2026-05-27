@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { LoginScreen } from '@/components/LoginScreen';
 import { Entities } from '@uipath/uipath-typescript/entities';
 import type { EntityRecord } from '@uipath/uipath-typescript/entities';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -118,16 +119,7 @@ export function MetricMappingAdminPage() {
     return mappings.some(m => m.isNew || m.isEdited);
   }, [mappings]);
   if (!isAuthenticated) {
-    return (
-      <AppLayout container>
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <div className="text-center space-y-4">
-            <AlertCircle className="w-12 h-12 text-gray-400 mx-auto" />
-            <p className="text-gray-600">Please log in to manage metric mappings.</p>
-          </div>
-        </div>
-      </AppLayout>
-    );
+    return <LoginScreen />;
   }
   if (isLoading) {
     return (
